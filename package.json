@@ -1,0 +1,14 @@
+{
+  "name": "minecraft-server-panel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "面向飞牛 NAS 的原生 Minecraft 文件管理面板",
+  "workspaces": ["server", "client"],
+  "engines": { "node": ">=24 <25" },
+  "scripts": {
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test --workspace @mc-panel/server",
+    "build": "npm run build --workspaces",
+    "start": "npm run start --workspace @mc-panel/server"
+  }
+}

@@ -1,0 +1,62 @@
+name: Check and build native panel
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_fpk:
+        description: 'Build FPK after verifying fnOS templates and configuring FNPACK_URL / FNPACK_SHA256'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FNPACK_URL: ${{ vars.FNPACK_URL }}
+      FNPACK_SHA256: ${{ vars.FNPACK_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dependencies in cloud
+        run: npm install --no-audit --no-fund
+      - name: Check types and lifecycle syntax
+        run: |
+          npm run check
+          sh -n fpk/cmd/main
+          node --check scripts/prepare-native.mjs
+      - name: Run filesystem and real HTTP tests
+        run: npm test
+      - name: Build frontend and backend
+        run: npm run build
+      - name: Prepare native preview
+        if: ${{ !inputs.build_fpk }}
+        run: node scripts/prepare-native.mjs
+      - name: Prepare FPK
+        if: ${{ inputs.build_fpk }}
+        run: node scripts/prepare-native.mjs --fpk
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-panel-linux-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            artifacts/native-preview-linux-x64.tar.gz
+            artifacts/build-info.json
+            artifacts/*.fpk
+            package-lock.json

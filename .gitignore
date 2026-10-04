@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.data/
+artifacts/
+参考项目/
+*.fpk

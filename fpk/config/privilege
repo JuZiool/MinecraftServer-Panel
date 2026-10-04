@@ -1,0 +1,5 @@
+{
+  "defaults": { "run-as": "package" },
+  "username": "mc-server-panel",
+  "groupname": "mc-server-panel"
+}

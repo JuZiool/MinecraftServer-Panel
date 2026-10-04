@@ -1,0 +1,105 @@
+#!/bin/sh
+set -eu
+umask 077
+
+# The TRIM_* fallback names and status exit codes still need fnOS verification.
+APP_DIR=${PANEL_APP_DIR:-${TRIM_APPDEST:-}}
+DATA_DIR=${PANEL_DATA_DIR:-${TRIM_PKGVAR:-}}
+if [ -z "$APP_DIR" ] || [ -z "$DATA_DIR" ]; then
+  echo 'Missing application/data directory environment' >&2
+  exit 1
+fi
+APP_DIR=$(readlink -f -- "$APP_DIR")
+DATA_DIR=$(readlink -f -- "$DATA_DIR")
+if [ "$APP_DIR" = / ] || [ "$DATA_DIR" = / ] || [ "$APP_DIR" = "$DATA_DIR" ]; then
+  echo 'Unsafe application/data directory configuration' >&2
+  exit 1
+fi
+if [ "$(id -u)" -eq 0 ]; then
+  echo 'Run this service as its dedicated application account' >&2
+  exit 1
+fi
+NODE="$APP_DIR/node/bin/node"
+ENTRY="$APP_DIR/server/dist/index.js"
+RUN_DIR="$DATA_DIR/run"
+PID_FILE="$RUN_DIR/panel.pid"
+LOG_FILE="$DATA_DIR/panel.log"
+LOCK_FILE="$RUN_DIR/control.lock"
+PORT=${SERVER_PORT:-${TRIM_SERVICE_PORT:-4560}}
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  pid=$(cat "$PID_FILE")
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 1 ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ "$(stat -c %u "/proc/$pid" 2>/dev/null)" = "$(id -u)" ] || return 1
+  tr '\000' '\n' < "/proc/$pid/cmdline" | grep -F -x -- "$NODE" >/dev/null || return 1
+  tr '\000' '\n' < "/proc/$pid/cmdline" | grep -F -x -- "$ENTRY" >/dev/null || return 1
+}
+
+lock_control() {
+  mkdir -p -- "$RUN_DIR"
+  command -v flock >/dev/null 2>&1 || { echo 'Linux flock is required' >&2; exit 1; }
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || { echo 'Another lifecycle operation is running; retry shortly' >&2; exit 1; }
+}
+
+start_service() {
+  is_running && return 0
+  [ -x "$NODE" ] && [ -f "$ENTRY" ] || { echo 'Bundled runtime is missing' >&2; return 1; }
+  if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE")" -gt 1048576 ]; then
+    mv -f -- "$LOG_FILE" "$LOG_FILE.previous"
+  fi
+  export PANEL_DATA_DIR="$DATA_DIR"
+  export PANEL_PUBLIC_DIR="$APP_DIR/client/dist"
+  export SERVER_PORT="$PORT"
+  export NODE_ENV=production
+  cd -- "$APP_DIR"
+  nohup "$NODE" "$ENTRY" 9>&- >> "$LOG_FILE" 2>&1 < /dev/null &
+  started_pid=$!
+  printf '%s\n' "$started_pid" > "$PID_FILE.new"
+  mv -f -- "$PID_FILE.new" "$PID_FILE"
+  attempts=0
+  while [ "$attempts" -lt 30 ]; do
+    if ! kill -0 "$started_pid" 2>/dev/null; then
+      echo "Panel exited during startup; check $LOG_FILE" >&2
+      return 1
+    fi
+    if is_running && "$NODE" -e 'fetch("http://127.0.0.1:" + process.env.SERVER_PORT + "/api/health", {signal: AbortSignal.timeout(1000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+  echo 'Panel startup timed out' >&2
+  stop_service
+  return 1
+}
+
+stop_service() {
+  if ! is_running; then
+    rm -f -- "$PID_FILE"
+    return 0
+  fi
+  stopped_pid=$pid
+  kill -TERM "$stopped_pid"
+  attempts=0
+  while is_running && [ "$attempts" -lt 35 ]; do
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+  if is_running; then
+    echo 'Panel did not finish shutdown' >&2
+    return 1
+  fi
+  rm -f -- "$PID_FILE"
+}
+
+case "${1:-}" in
+  status) if is_running; then exit 0; else exit 3; fi ;;
+  start) lock_control; start_service ;;
+  stop) lock_control; stop_service ;;
+  restart) lock_control; stop_service; start_service ;;
+  *) echo 'Usage: main {start|stop|restart|status}' >&2; exit 2 ;;
+esac

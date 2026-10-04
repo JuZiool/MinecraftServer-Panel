@@ -1,0 +1,22 @@
+{
+  "name": "@mc-panel/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "tsx --test test/*.test.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "express": "5.1.0",
+    "tar": "7.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.1",
+    "@types/node": "24.0.0",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3"
+  }
+}

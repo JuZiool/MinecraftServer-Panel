@@ -1,0 +1,14 @@
+appname = mc-server-panel
+version = 0.1.0
+display_name = MC 服务器管理面板
+desc = 面向飞牛 NAS 的原生 Minecraft 文件管理面板
+platform = x86
+source = thirdparty
+maintainer = JuZiool
+maintainer_url = https://github.com/JuZiool/MinecraftServer-Panel
+distributor = JuZiool
+distributor_url = https://github.com/JuZiool/MinecraftServer-Panel
+desktop_uidir = ui
+desktop_applaunchname = mc-server-panel.Application
+service_port = 4560
+checkport = true
