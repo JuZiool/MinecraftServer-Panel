@@ -388,6 +388,7 @@ export class Files {
       release: () => {
         if (released) return;
         released = true;
+        stream.on('error', () => { /* Ignore writes racing an intentional cancellation. */ });
         controller.abort();
         stream.destroy();
         this.streams.delete(controller);
