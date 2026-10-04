@@ -330,7 +330,8 @@ export class Files {
       follow: false,
       strict: true,
       filter: (_entryPath, stat) => {
-        if (!stat.isFile() && !stat.isDirectory()) throw new HttpError(403, '所选目录包含符号链接或特殊文件，不能压缩');
+        const type = 'type' in stat ? stat.type : stat.isFile() ? 'File' : stat.isDirectory() ? 'Directory' : '';
+        if (type !== 'File' && type !== 'Directory') throw new HttpError(403, '所选目录包含符号链接或特殊文件，不能压缩');
         return true;
       },
     }, items);
@@ -426,7 +427,9 @@ export class Files {
             const normalized = relativePath(entryPath);
             if (!normalized) return false;
             if (normalized.split('/').some(part => INTERNAL_FILE.test(part))) throw new HttpError(400, '压缩包包含面板保留名称');
-            if (entry.type !== 'File' && entry.type !== 'OldFile' && entry.type !== 'Directory') {
+            if (!('type' in entry)) throw new HttpError(400, '压缩包条目类型不正确，已停止解压');
+            const entryType = entry.type;
+            if (entryType !== 'File' && entryType !== 'OldFile' && entryType !== 'Directory') {
               throw new HttpError(400, '压缩包包含链接或特殊文件，已停止解压');
             }
             if (seen.has(normalized)) throw new HttpError(400, '压缩包包含重复路径，已停止解压');
@@ -439,7 +442,7 @@ export class Files {
               }
               requiredDirectories.add(parent);
             }
-            if (entry.type !== 'Directory' && requiredDirectories.has(normalized)) {
+            if (entryType !== 'Directory' && requiredDirectories.has(normalized)) {
               throw new HttpError(400, '压缩包中的文件与目录路径冲突，已停止解压');
             }
             const size = Number(entry.size ?? 0);
@@ -448,7 +451,7 @@ export class Files {
             if (expanded > MAX_EXTRACTED) {
               throw new HttpError(413, '压缩包超过 200000 个条目或解压后 100 GiB 限制');
             }
-            seen.set(normalized, entry.type);
+            seen.set(normalized, entryType);
             return true;
           },
         });
