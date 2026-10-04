@@ -2,8 +2,9 @@ import { constants, createWriteStream } from 'node:fs';
 import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, link } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { Transform, type Readable } from 'node:stream';
+import { PassThrough, Transform, Writable, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { createGzip } from 'node:zlib';
 import { create as createTar, extract as extractTar } from 'tar';
 import { HttpError, MutationQueue, text } from './errors.js';
 import { writeJson } from './store.js';
@@ -325,7 +326,6 @@ export class Files {
   private tarStream(root: Root, items: string[]) {
     return createTar({
       cwd: root.path,
-      gzip: true,
       portable: true,
       follow: false,
       strict: true,
@@ -358,7 +358,7 @@ export class Files {
       this.streams.add(controller);
       if (this.stopping) controller.abort();
       try {
-        await pipeline(this.tarStream(root, items), createWriteStream(temporary, { flags: 'wx', mode: 0o666 }), { signal: controller.signal });
+        await pipeline(this.tarStream(root, items), createGzip(), createWriteStream(temporary, { flags: 'wx', mode: 0o666 }), { signal: controller.signal });
         const handle = await open(temporary, 'r+');
         try { await handle.sync(); } finally { await handle.close(); }
         await this.resolve(id, targetRelative, true, true);
@@ -376,10 +376,13 @@ export class Files {
     const root = this.root(id);
     const [item] = await this.selected(id, [text(input, '文件路径')], false);
     await this.checkTree(await this.resolve(id, item));
-    const stream = this.tarStream(root, [item]);
+    const stream = new PassThrough();
     const controller = new AbortController();
     this.streams.add(controller);
     if (this.stopping) controller.abort();
+    void pipeline(this.tarStream(root, [item]), createGzip(), stream, { signal: controller.signal }).catch(error => {
+      if (!controller.signal.aborted) stream.destroy(error as Error);
+    });
     let released = false;
     return {
       name: `${path.posix.basename(item)}.tar.gz`,
@@ -388,9 +391,7 @@ export class Files {
       release: () => {
         if (released) return;
         released = true;
-        stream.on('error', () => { /* Ignore writes racing an intentional cancellation. */ });
         controller.abort();
-        stream.destroy();
         this.streams.delete(controller);
       },
     };
@@ -456,7 +457,28 @@ export class Files {
             return true;
           },
         });
-        await pipeline(handle.createReadStream({ autoClose: false }), extractor, { signal: controller.signal });
+        let aborting = false;
+        const input = new Writable({
+          write: (chunk, _encoding, callback) => {
+            try {
+              if (extractor.write(chunk)) callback();
+              else extractor.once('drain', callback);
+            } catch (error) { callback(error as Error); }
+          },
+          final: callback => {
+            extractor.once('close', callback);
+            extractor.end();
+          },
+          destroy: (error, callback) => {
+            if (error && !aborting) {
+              aborting = true;
+              try { extractor.abort(error); } catch { /* The stream error is reported by the pipeline. */ }
+            }
+            callback(error);
+          },
+        });
+        extractor.on('error', error => input.destroy(error));
+        await pipeline(handle.createReadStream({ autoClose: false }), input, { signal: controller.signal });
         await this.checkTree(staging);
         const topLevel = await readdir(staging);
         const plans = [];
